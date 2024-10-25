@@ -99,24 +99,29 @@ Figure 4.3.b Mining Protocol Messages: Mining on Standard Channel
 
 Flags usable in `SetupConnection.flags` and `SetupConnection.Error::flags`, where bit 0 is the least significant bit of the u32 type:
 
-| Field Name               | Bit | Description                                                                         |
-| ------------------------ | --- | ----------------------------------------------------------------------------------- |
-| REQUIRES_STANDARD_JOBS   | 0   | The downstream node requires standard jobs. It does not understand group channels - |
-|                          |     | it is unable to process extended jobs sent to standard channels through a group     |
-|                          |     | channel.                                                                            |
-| REQUIRES_WORK_SELECTION  | 1   | If set to 1, the client notifies the server that it will send SetCustomMiningJob on |
-|                          |     | this connection                                                                     |
-| REQUIRES_VERSION_ROLLING | 2   | The client requires version rolling for efficiency or correct operation and the     |
-|                          |     | server MUST NOT send jobs which do not allow version rolling                        |
+| Field Name                  | Bit | Description                                                                                    |
+|-----------------------------|-----|------------------------------------------------------------------------------------------------|
+| REQUIRES_STANDARD_JOBS      | 0   | The downstream node requires standard jobs. It does not understand group channels -            |
+|                             |     | it is unable to process extended jobs sent to standard channels through a group                |
+|                             |     | channel.                                                                                       |
+| REQUIRES_WORK_SELECTION     | 1   | If set to 1, the client notifies the server that it will send SetCustomMiningJob on            |
+|                             |     | this connection                                                                                |
+| REQUIRES_VERSION_ROLLING    | 2   | The client requires version rolling for efficiency or correct operation and the                |
+|                             |     | server MUST NOT send jobs which do not allow version rolling                                   |
+| REQUIRES_USER_IDENTITY_SYNC | 3   | If set to 1, the client requires user_identity(s) synchronization messages to communicate them |
+|                             |     | to the server and get granularity on server side                                               |
 
 Flags usable in `SetupConnection.Success.flags`:
-| Field Name | Bit | Description |
-|----------------------------|-----|-----------------------------------------------------------------------------------|
-| REQUIRES_FIXED_VERSION | 0 | Upstream node will not accept any changes to the version field. Note that if |
-| | | REQUIRES_VERSION_ROLLING was set in the SetupConnection::flags field, this bit |
-| | | MUST NOT be set. Further, if this bit is set, extended jobs MUST NOT indicate |
-| | | support for version rolling. |
-| REQUIRES_EXTENDED_CHANNELS | 1 | Upstream node will not accept opening of a standard channel |
+
+| Field Name                  | Bit | Description                                                                         |
+|-----------------------------|-----|-------------------------------------------------------------------------------------|
+| REQUIRES_FIXED_VERSION      | 0   | Upstream node will not accept any changes to the version field. Note that if        |
+|                             |     | REQUIRES_VERSION_ROLLING was set in the SetupConnection::flags field, this bit      |
+|                             |     | MUST NOT be set. Further, if this bit is set, extended jobs MUST NOT indicate       |
+|                             |     | support for version rolling.                                                        |
+| REQUIRES_EXTENDED_CHANNELS  | 1   | Upstream node will not accept opening of a standard channel                         |
+| REQUIRES_USER_IDENTITY_SYNC | 2   | If set to 1, it means upstream node is not supporting user_identity synchronization |
+|                             |     | messages. So it will discard all SetUserIdentity messages sent by client.           |
 
 ### 5.3.2 `OpenStandardMiningChannel` (Client -> Server)
 
@@ -448,3 +453,46 @@ This message can be sent only to connections that don’t have `REQUIRES_STANDAR
 | ---------------- | ------------- | ----------------------------------------------------------------------------------------- |
 | group_channel_id | U32           | Identifier of the group where the standard channel belongs                                |
 | channel_ids      | SEQ0_64K[U32] | A sequence of opened standard channel IDs, for which the group channel is being redefined |
+
+
+### 5.3.23 `SetUserIdentity` (Client -> Server)
+
+Can be sent only after `SetupConnection` where the `REQUIRES_USER_IDENTITY_SYNC` flag is supported.
+
+The client uses this message to communicate multiple worker identities to the pool asynchronously. Each identity in `user_identity` is mapped to a unique `user_id`, allowing the pool to track individual worker shares.
+
+| Field Name    | Data Type     | Description                                                                  |
+|---------------|---------------|------------------------------------------------------------------------------|
+| channel_id    | U32           | Standard or extended channel identifier                                       |
+| request_id    | U32           | Client-specified identifier for pairing responses                             |
+| user_id       | SEQ0_64K[U32] | Sequence of unique user identifiers for each worker                           |
+| user_identity | SEQ0_64K[STR0_255] | Sequence of worker names/identities corresponding to each `user_id`   |
+
+
+### 5.3.24 `SetUserIdentity.Success` (Server -> Client)
+
+Sent as a response to `SetUserIdentity` if the pool successfully associates the `user_id` with the `user_identity` for each worker.
+
+| Field Name    | Data Type     | Description                                                                  |
+|---------------|---------------|------------------------------------------------------------------------------|
+| channel_id    | U32           | Channel identifier linked to the user identities                              |
+| request_id    | U32           | The request ID from the original `SetUserIdentity` message                    |
+| user_id       | SEQ0_64K[U32] | Sequence of user identifiers successfully associated with `user_identity`     |
+
+
+### 5.3.25 `SetUserIdentity.Error` (Server -> Client)
+
+Sent as a response to `SetUserIdentity` if an error occurs, such as an invalid or too-long `user_identity`.
+
+| Field Name    | Data Type  | Description                                                                                                                 |
+|---------------|------------|-----------------------------------------------------------------------------------------------------------------------------|
+| channel_id    | U32        | Channel identifier for which the error occurred                                                                             |
+| request_id    | U32        | Client-specified identifier for pairing responses. Value from the request MUST be provided by upstream in the response.     |
+| error_code    | STR0_255   | Reason why the `SetUserIdentity` request failed.                                                                            |
+
+Possible errors:
+
+- `invalid-channel-id`
+- `duplicate-user-id`
+- `user-identity-too-long-{}` - `{}` is replaced by the specific `user_id` causing the issue
+- `user-id-mapping-failed`
